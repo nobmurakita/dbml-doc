@@ -1,0 +1,6 @@
+/dbml-doc
+
+/*.dbml
+/*.xlsx
+/*.md
+!README.md

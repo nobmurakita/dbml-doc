@@ -1,0 +1,25 @@
+Table users {
+  id integer [pk, increment, note: 'ユーザーID']
+  name varchar(255) [not null, note: 'ユーザー名']
+  email varchar(255) [not null, unique, note: 'メールアドレス']
+  created_at timestamp [default: 'now()']
+}
+
+Table posts {
+  id integer [pk, increment]
+  user_id integer [not null, ref: > users.id]
+  title varchar(255) [not null]
+  body text
+  created_at timestamp [default: 'now()']
+
+  indexes {
+    user_id
+    (user_id, created_at) [name: 'idx_posts_user_date']
+  }
+}
+
+Enum status {
+  draft
+  published
+  archived [note: 'アーカイブ済み']
+}
