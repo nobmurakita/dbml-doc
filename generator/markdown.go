@@ -106,7 +106,7 @@ func writeEnumSection(w io.Writer, dbml *model.DBML) {
 // writeTableDetail は1テーブル分の定義（見出し・カラム・インデックス・リレーション）を出力する
 // headingLevelはMarkdown見出しレベル（"###" や "##" など）
 // refTableLinkはリレーション参照先テーブルへのリンク生成関数（nilの場合リンクなし）
-func writeTableDetail(w io.Writer, t *model.Table, refs []refInfo, enumMode string, enumMap map[string]*model.Enum, headingLevel string, refTableLink func(string) string) {
+func writeTableDetail(w io.Writer, t *model.Table, refs []refInfo, reverseRefs []refInfo, enumMode string, enumMap map[string]*model.Enum, headingLevel string, refTableLink func(string) string) {
 	tableName := fullTableName(t)
 
 	fmt.Fprintf(w, "%s %s\n\n", headingLevel, tableName)
@@ -172,9 +172,9 @@ func writeTableDetail(w io.Writer, t *model.Table, refs []refInfo, enumMode stri
 		fmt.Fprintln(w)
 	}
 
-	// リレーション
+	// リレーション（参照先）
 	if len(refs) > 0 {
-		fmt.Fprintln(w, "**リレーション:**")
+		fmt.Fprintln(w, "**リレーション（参照先）:**")
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "| カラム | 参照先 | 種類 |")
 		fmt.Fprintln(w, "|--------|-------|------|")
@@ -184,6 +184,22 @@ func writeTableDetail(w io.Writer, t *model.Table, refs []refInfo, enumMode stri
 				target = fmt.Sprintf("[%s](%s)", r.target, refTableLink(r.toTable))
 			}
 			fmt.Fprintf(w, "| %s | %s | %s |\n", r.column, target, r.relType)
+		}
+		fmt.Fprintln(w)
+	}
+
+	// リレーション（参照元）
+	if len(reverseRefs) > 0 {
+		fmt.Fprintln(w, "**リレーション（参照元）:**")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "| カラム | 参照元 | 種類 |")
+		fmt.Fprintln(w, "|--------|-------|------|")
+		for _, r := range reverseRefs {
+			source := r.target
+			if refTableLink != nil {
+				source = fmt.Sprintf("[%s](%s)", r.target, refTableLink(r.toTable))
+			}
+			fmt.Fprintf(w, "| %s | %s | %s |\n", r.column, source, r.relType)
 		}
 		fmt.Fprintln(w)
 	}
@@ -246,6 +262,69 @@ func buildRefMap(dbml *model.DBML) map[string][]refInfo {
 	}
 
 	return result
+}
+
+// buildReverseRefMap はテーブル名→参照元リレーション情報のマップを構築する
+func buildReverseRefMap(dbml *model.DBML) map[string][]refInfo {
+	result := make(map[string][]refInfo)
+
+	// 明示的Refから
+	for _, r := range dbml.Refs {
+		fromTable := r.From.Table
+		if r.From.Schema != "" {
+			fromTable = r.From.Schema + "." + fromTable
+		}
+		toTable := r.To.Table
+		if r.To.Schema != "" {
+			toTable = r.To.Schema + "." + toTable
+		}
+
+		fromCols := strings.Join(r.From.Columns, ", ")
+		toCols := strings.Join(r.To.Columns, ", ")
+		relType := reverseRelType(formatRefType(r.Type))
+
+		result[toTable] = append(result[toTable], refInfo{
+			column:  toCols,
+			target:  fromTable + "." + fromCols,
+			toTable: fromTable,
+			toCols:  fromCols,
+			relType: relType,
+		})
+	}
+
+	// インラインRefから
+	for _, t := range dbml.Tables {
+		tableName := t.Name
+		if t.Schema != "" {
+			tableName = t.Schema + "." + t.Name
+		}
+		for _, c := range t.Columns {
+			if c.Ref != nil {
+				relType := reverseRelType(formatRefType(c.Ref.Type))
+				result[c.Ref.Table] = append(result[c.Ref.Table], refInfo{
+					column:  c.Ref.Column,
+					target:  tableName + "." + c.Name,
+					toTable: tableName,
+					toCols:  c.Name,
+					relType: relType,
+				})
+			}
+		}
+	}
+
+	return result
+}
+
+// reverseRelType はリレーション種類を逆方向にする
+func reverseRelType(relType string) string {
+	switch relType {
+	case "N:1":
+		return "1:N"
+	case "1:N":
+		return "N:1"
+	default:
+		return relType
+	}
 }
 
 func formatRefType(refType string) string {
@@ -333,10 +412,10 @@ func writeEnumPage(w io.Writer, dbml *model.DBML) {
 }
 
 // writeTablePage はテーブルページの内容を出力する
-func writeTablePage(w io.Writer, t *model.Table, refs []refInfo, enumMode string, enumMap map[string]*model.Enum, refTableLink func(string) string) {
+func writeTablePage(w io.Writer, t *model.Table, refs []refInfo, reverseRefs []refInfo, enumMode string, enumMap map[string]*model.Enum, refTableLink func(string) string) {
 	fmt.Fprintln(w, "[< 目次に戻る](../index.md)")
 	fmt.Fprintln(w)
-	writeTableDetail(w, t, refs, enumMode, enumMap, "##", refTableLink)
+	writeTableDetail(w, t, refs, reverseRefs, enumMode, enumMap, "##", refTableLink)
 }
 
 // GenerateMarkdownPages はマルチページMarkdown出力のエントリポイント
@@ -368,6 +447,7 @@ func GenerateMarkdownPages(outputDir string, dbml *model.DBML, enumMode string) 
 	// テーブルページ
 	enumMap := buildEnumMap(dbml)
 	refMap := buildRefMap(dbml)
+	reverseRefMap := buildReverseRefMap(dbml)
 	refTableLink := func(name string) string {
 		return tableToFileName(name)
 	}
@@ -379,7 +459,7 @@ func GenerateMarkdownPages(outputDir string, dbml *model.DBML, enumMode string) 
 		if err != nil {
 			return fmt.Errorf("テーブルファイル作成失敗(%s): %w", fileName, err)
 		}
-		writeTablePage(f, &t, refMap[tableName], enumMode, enumMap, refTableLink)
+		writeTablePage(f, &t, refMap[tableName], reverseRefMap[tableName], enumMode, enumMap, refTableLink)
 		f.Close()
 	}
 
