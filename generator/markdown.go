@@ -3,6 +3,8 @@ package generator
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nobmurakita/dbml-doc/model"
@@ -43,8 +45,8 @@ func formatEnumNote(e *model.Enum) string {
 	return strings.Join(parts, ", ")
 }
 
-// GenerateMarkdown はDBMLモデルからMarkdownテーブル定義書を生成する
-func GenerateMarkdown(w io.Writer, dbml *model.DBML, enumMode string) error {
+// writeProjectHeader はタイトルとプロジェクト情報を出力する
+func writeProjectHeader(w io.Writer, dbml *model.DBML) {
 	fmt.Fprintln(w, "# データベース定義書")
 	fmt.Fprintln(w)
 
@@ -59,144 +61,140 @@ func GenerateMarkdown(w io.Writer, dbml *model.DBML, enumMode string) error {
 			fmt.Fprintf(w, "%s\n\n", dbml.Project.Note)
 		}
 	}
-
-	// テーブル一覧
-	if len(dbml.Tables) > 0 {
-		fmt.Fprintln(w, "## テーブル一覧")
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "| # | テーブル名 | 説明 |")
-		fmt.Fprintln(w, "|---|-----------|------|")
-		for i, t := range dbml.Tables {
-			tableName := t.Name
-			if t.Schema != "" {
-				tableName = t.Schema + "." + t.Name
-			}
-			anchor := toAnchor(tableName)
-			fmt.Fprintf(w, "| %d | [%s](#%s) | %s |\n", i+1, tableName, anchor, t.Note)
-		}
-		fmt.Fprintln(w)
-	}
-
-	// Enumマップ構築（inlineモード用）
-	enumMap := buildEnumMap(dbml)
-
-	// Enum定義（independentモードのみ）
-	if enumMode != "inline" && len(dbml.Enums) > 0 {
-		fmt.Fprintln(w, "## Enum定義")
-		fmt.Fprintln(w)
-		for _, e := range dbml.Enums {
-			enumName := e.Name
-			if e.Schema != "" {
-				enumName = e.Schema + "." + e.Name
-			}
-			fmt.Fprintf(w, "### %s\n\n", enumName)
-			fmt.Fprintln(w, "| 値 | 説明 |")
-			fmt.Fprintln(w, "|----|------|")
-			for _, v := range e.Values {
-				fmt.Fprintf(w, "| %s | %s |\n", v.Name, v.Note)
-			}
-			fmt.Fprintln(w)
-		}
-	}
-
-	// テーブル定義
-	if len(dbml.Tables) > 0 {
-		fmt.Fprintln(w, "## テーブル定義")
-		fmt.Fprintln(w)
-
-		// Refをテーブル→カラムでグルーピング
-		refMap := buildRefMap(dbml)
-
-		for _, t := range dbml.Tables {
-			tableName := t.Name
-			if t.Schema != "" {
-				tableName = t.Schema + "." + t.Name
-			}
-
-			fmt.Fprintf(w, "### %s\n\n", tableName)
-			if t.Note != "" {
-				fmt.Fprintf(w, "%s\n\n", t.Note)
-			}
-
-			// カラム定義
-			fmt.Fprintln(w, "| # | カラム名 | 型 | NULL | デフォルト | 制約 | 説明 |")
-			fmt.Fprintln(w, "|---|---------|-----|------|----------|------|------|")
-			for i, c := range t.Columns {
-				nullable := "YES"
-				if c.NotNull || c.PrimaryKey {
-					nullable = "NO"
-				}
-				defaultVal := "-"
-				if c.Default != nil {
-					defaultVal = *c.Default
-				}
-				constraints := buildConstraints(c)
-				colType := c.Type
-				colNote := c.Note
-				if enumMode == "inline" {
-					if e, ok := enumMap[c.Type]; ok {
-						colType = formatEnumType(e, "<br>")
-						enumNote := formatEnumNote(e)
-						if enumNote != "" {
-							if colNote != "" {
-								colNote = colNote + "<br>" + enumNote
-							} else {
-								colNote = enumNote
-							}
-						}
-					}
-				}
-				fmt.Fprintf(w, "| %d | %s | %s | %s | %s | %s | %s |\n",
-					i+1, c.Name, colType, nullable, defaultVal, constraints, colNote)
-			}
-			fmt.Fprintln(w)
-
-			// インデックス
-			if len(t.Indexes) > 0 {
-				fmt.Fprintln(w, "**インデックス:**")
-				fmt.Fprintln(w)
-				fmt.Fprintln(w, "| インデックス名 | カラム | 種類 | ユニーク |")
-				fmt.Fprintln(w, "|--------------|--------|------|---------|")
-				for _, idx := range t.Indexes {
-					idxName := idx.Name
-					if idxName == "" {
-						idxName = "-"
-					}
-					cols := formatIndexColumns(idx.Columns)
-					idxType := idx.Type
-					if idxType == "" {
-						idxType = "-"
-					}
-					unique := "NO"
-					if idx.Unique || idx.PK {
-						unique = "YES"
-					}
-					fmt.Fprintf(w, "| %s | %s | %s | %s |\n", idxName, cols, idxType, unique)
-				}
-				fmt.Fprintln(w)
-			}
-
-			// リレーション
-			refs := refMap[tableName]
-			if len(refs) > 0 {
-				fmt.Fprintln(w, "**リレーション:**")
-				fmt.Fprintln(w)
-				fmt.Fprintln(w, "| カラム | 参照先 | 種類 |")
-				fmt.Fprintln(w, "|--------|-------|------|")
-				for _, r := range refs {
-					fmt.Fprintf(w, "| %s | %s | %s |\n", r.column, r.target, r.relType)
-				}
-				fmt.Fprintln(w)
-			}
-		}
-	}
-
-	return nil
 }
+
+// writeTableList はテーブル一覧テーブルを出力する
+// tableLinkはテーブル名からリンク先を生成する関数
+func writeTableList(w io.Writer, dbml *model.DBML, tableLink func(string) string) {
+	if len(dbml.Tables) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "## テーブル一覧")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "| # | テーブル名 | 説明 |")
+	fmt.Fprintln(w, "|---|-----------|------|")
+	for i, t := range dbml.Tables {
+		tableName := fullTableName(&t)
+		link := tableLink(tableName)
+		fmt.Fprintf(w, "| %d | [%s](%s) | %s |\n", i+1, tableName, link, t.Note)
+	}
+	fmt.Fprintln(w)
+}
+
+// writeEnumSection はEnum定義セクションを出力する（independentモード用）
+func writeEnumSection(w io.Writer, dbml *model.DBML) {
+	if len(dbml.Enums) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "## Enum定義")
+	fmt.Fprintln(w)
+	for _, e := range dbml.Enums {
+		enumName := e.Name
+		if e.Schema != "" {
+			enumName = e.Schema + "." + e.Name
+		}
+		fmt.Fprintf(w, "### %s\n\n", enumName)
+		fmt.Fprintln(w, "| 値 | 説明 |")
+		fmt.Fprintln(w, "|----|------|")
+		for _, v := range e.Values {
+			fmt.Fprintf(w, "| %s | %s |\n", v.Name, v.Note)
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+// writeTableDetail は1テーブル分の定義（見出し・カラム・インデックス・リレーション）を出力する
+// headingLevelはMarkdown見出しレベル（"###" や "##" など）
+// refTableLinkはリレーション参照先テーブルへのリンク生成関数（nilの場合リンクなし）
+func writeTableDetail(w io.Writer, t *model.Table, refs []refInfo, enumMode string, enumMap map[string]*model.Enum, headingLevel string, refTableLink func(string) string) {
+	tableName := fullTableName(t)
+
+	fmt.Fprintf(w, "%s %s\n\n", headingLevel, tableName)
+	if t.Note != "" {
+		fmt.Fprintf(w, "%s\n\n", t.Note)
+	}
+
+	// カラム定義
+	fmt.Fprintln(w, "| # | カラム名 | 型 | NULL | デフォルト | 制約 | 説明 |")
+	fmt.Fprintln(w, "|---|---------|-----|------|----------|------|------|")
+	for i, c := range t.Columns {
+		nullable := "YES"
+		if c.NotNull || c.PrimaryKey {
+			nullable = "NO"
+		}
+		defaultVal := "-"
+		if c.Default != nil {
+			defaultVal = *c.Default
+		}
+		constraints := buildConstraints(c)
+		colType := c.Type
+		colNote := c.Note
+		if enumMode == "inline" {
+			if e, ok := enumMap[c.Type]; ok {
+				colType = formatEnumType(e, "<br>")
+				enumNote := formatEnumNote(e)
+				if enumNote != "" {
+					if colNote != "" {
+						colNote = colNote + "<br>" + enumNote
+					} else {
+						colNote = enumNote
+					}
+				}
+			}
+		}
+		fmt.Fprintf(w, "| %d | %s | %s | %s | %s | %s | %s |\n",
+			i+1, c.Name, colType, nullable, defaultVal, constraints, colNote)
+	}
+	fmt.Fprintln(w)
+
+	// インデックス
+	if len(t.Indexes) > 0 {
+		fmt.Fprintln(w, "**インデックス:**")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "| インデックス名 | カラム | 種類 | ユニーク |")
+		fmt.Fprintln(w, "|--------------|--------|------|---------|")
+		for _, idx := range t.Indexes {
+			idxName := idx.Name
+			if idxName == "" {
+				idxName = "-"
+			}
+			cols := formatIndexColumns(idx.Columns)
+			idxType := idx.Type
+			if idxType == "" {
+				idxType = "-"
+			}
+			unique := "NO"
+			if idx.Unique || idx.PK {
+				unique = "YES"
+			}
+			fmt.Fprintf(w, "| %s | %s | %s | %s |\n", idxName, cols, idxType, unique)
+		}
+		fmt.Fprintln(w)
+	}
+
+	// リレーション
+	if len(refs) > 0 {
+		fmt.Fprintln(w, "**リレーション:**")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "| カラム | 参照先 | 種類 |")
+		fmt.Fprintln(w, "|--------|-------|------|")
+		for _, r := range refs {
+			target := r.target
+			if refTableLink != nil {
+				target = fmt.Sprintf("[%s](%s)", r.target, refTableLink(r.toTable))
+			}
+			fmt.Fprintf(w, "| %s | %s | %s |\n", r.column, target, r.relType)
+		}
+		fmt.Fprintln(w)
+	}
+}
+
 
 type refInfo struct {
 	column  string
-	target  string
+	target  string   // 表示用（既存互換）
+	toTable string   // リンク生成用
+	toCols  string   // リンク生成用
 	relType string
 }
 
@@ -222,6 +220,8 @@ func buildRefMap(dbml *model.DBML) map[string][]refInfo {
 		result[fromTable] = append(result[fromTable], refInfo{
 			column:  fromCols,
 			target:  toTable + "." + toCols,
+			toTable: toTable,
+			toCols:  toCols,
 			relType: relType,
 		})
 	}
@@ -237,6 +237,8 @@ func buildRefMap(dbml *model.DBML) map[string][]refInfo {
 				result[tableName] = append(result[tableName], refInfo{
 					column:  c.Name,
 					target:  c.Ref.Table + "." + c.Ref.Column,
+					toTable: c.Ref.Table,
+					toCols:  c.Ref.Column,
 					relType: formatRefType(c.Ref.Type),
 				})
 			}
@@ -261,13 +263,21 @@ func formatRefType(refType string) string {
 	}
 }
 
-// toAnchor はMarkdownの見出しテキストからGitHub互換のアンカーIDを生成する
-func toAnchor(heading string) string {
-	s := strings.ToLower(heading)
-	s = strings.ReplaceAll(s, " ", "-")
-	s = strings.ReplaceAll(s, ".", "")
-	return s
+// fullTableName はスキーマ付きテーブル名を返す
+func fullTableName(t *model.Table) string {
+	if t.Schema != "" {
+		return t.Schema + "." + t.Name
+	}
+	return t.Name
 }
+
+// tableToFileName はテーブル名を安全なファイル名に変換する（.→_、小文字化）
+func tableToFileName(name string) string {
+	s := strings.ToLower(name)
+	s = strings.ReplaceAll(s, ".", "_")
+	return s + ".md"
+}
+
 
 func buildConstraints(c model.Column) string {
 	var parts []string
@@ -296,4 +306,82 @@ func formatIndexColumns(cols []model.IndexColumn) string {
 		}
 	}
 	return strings.Join(names, ", ")
+}
+
+// writeIndexPage はindex.mdの内容を出力する
+func writeIndexPage(w io.Writer, dbml *model.DBML, enumMode string) {
+	writeProjectHeader(w, dbml)
+
+	// テーブル一覧（tables/ディレクトリ内のファイルへのリンク）
+	writeTableList(w, dbml, func(name string) string {
+		return "tables/" + tableToFileName(name)
+	})
+
+	// Enum一覧へのリンク（independentモード時のみ）
+	if enumMode != "inline" && len(dbml.Enums) > 0 {
+		fmt.Fprintln(w, "## Enum定義")
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "[Enum定義一覧](enums.md)\n\n")
+	}
+}
+
+// writeEnumPage はenums.mdの内容を出力する
+func writeEnumPage(w io.Writer, dbml *model.DBML) {
+	fmt.Fprintln(w, "[< 目次に戻る](index.md)")
+	fmt.Fprintln(w)
+	writeEnumSection(w, dbml)
+}
+
+// writeTablePage はテーブルページの内容を出力する
+func writeTablePage(w io.Writer, t *model.Table, refs []refInfo, enumMode string, enumMap map[string]*model.Enum, refTableLink func(string) string) {
+	fmt.Fprintln(w, "[< 目次に戻る](../index.md)")
+	fmt.Fprintln(w)
+	writeTableDetail(w, t, refs, enumMode, enumMap, "##", refTableLink)
+}
+
+// GenerateMarkdownPages はマルチページMarkdown出力のエントリポイント
+func GenerateMarkdownPages(outputDir string, dbml *model.DBML, enumMode string) error {
+	// ディレクトリ作成
+	tablesDir := filepath.Join(outputDir, "tables")
+	if err := os.MkdirAll(tablesDir, 0755); err != nil {
+		return fmt.Errorf("ディレクトリ作成失敗: %w", err)
+	}
+
+	// index.md
+	indexFile, err := os.Create(filepath.Join(outputDir, "index.md"))
+	if err != nil {
+		return fmt.Errorf("index.md作成失敗: %w", err)
+	}
+	defer indexFile.Close()
+	writeIndexPage(indexFile, dbml, enumMode)
+
+	// enums.md（independentモード時のみ）
+	if enumMode != "inline" && len(dbml.Enums) > 0 {
+		enumFile, err := os.Create(filepath.Join(outputDir, "enums.md"))
+		if err != nil {
+			return fmt.Errorf("enums.md作成失敗: %w", err)
+		}
+		defer enumFile.Close()
+		writeEnumPage(enumFile, dbml)
+	}
+
+	// テーブルページ
+	enumMap := buildEnumMap(dbml)
+	refMap := buildRefMap(dbml)
+	refTableLink := func(name string) string {
+		return tableToFileName(name)
+	}
+
+	for _, t := range dbml.Tables {
+		tableName := fullTableName(&t)
+		fileName := tableToFileName(tableName)
+		f, err := os.Create(filepath.Join(tablesDir, fileName))
+		if err != nil {
+			return fmt.Errorf("テーブルファイル作成失敗(%s): %w", fileName, err)
+		}
+		writeTablePage(f, &t, refMap[tableName], enumMode, enumMap, refTableLink)
+		f.Close()
+	}
+
+	return nil
 }

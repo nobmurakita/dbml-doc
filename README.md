@@ -19,17 +19,14 @@ go build -o dbml-doc .
 ## 使い方
 
 ```bash
-# Markdown出力（stdout）
-dbml-doc -i schema.dbml
-
-# Markdown出力（ファイル）
-dbml-doc -i schema.dbml -o schema.md
+# Markdown出力（ディレクトリに複数ファイル生成）
+dbml-doc -i schema.dbml -o docs
 
 # Excel出力
 dbml-doc -i schema.dbml -f excel -o schema.xlsx
 
 # Enum表示をMySQL風のインライン展開にする
-dbml-doc -i schema.dbml -e inline
+dbml-doc -i schema.dbml -e inline -o docs
 ```
 
 ### オプション
@@ -38,39 +35,26 @@ dbml-doc -i schema.dbml -e inline
 |-----------|------|----------|
 | `-i` | 入力DBMLファイル（必須） | - |
 | `-f` | 出力形式: `markdown` \| `excel` | `markdown` |
-| `-o` | 出力ファイルパス | stdout（Markdown）/ `output.xlsx`（Excel） |
+| `-o` | 出力先（Markdown: ディレクトリ、Excel: ファイルパス） | `output`（Markdown）/ `output.xlsx`（Excel） |
 | `-e` | Enum表示モード: `independent` \| `inline` | `independent` |
 
 ## 出力例
 
 ### Markdown
 
-```markdown
-# データベース定義書
+`-o docs` を指定すると以下のディレクトリ構成で出力されます:
 
-**プロジェクト:** ecommerce
-
-**データベース:** PostgreSQL
-
-## テーブル一覧
-
-| # | テーブル名 | 説明 |
-|---|-----------|------|
-| 1 | [users](#users) | ユーザー情報を管理するテーブル |
-| 2 | [products](#products) | 商品情報を管理するテーブル |
-
-## テーブル定義
-
-### users
-
-ユーザー情報を管理するテーブル
-
-| # | カラム名 | 型 | NULL | デフォルト | 制約 | 説明 |
-|---|---------|-----|------|----------|------|------|
-| 1 | id | integer | NO | - | PK, AUTO INCREMENT | ユーザーID |
-| 2 | username | varchar(255) | NO | - | UNIQUE | ユーザー名 |
-| 3 | email | varchar(255) | NO | - | UNIQUE | メールアドレス |
 ```
+docs/
+  index.md           -- 目次（プロジェクト情報 + テーブル一覧 + Enum一覧リンク）
+  enums.md           -- Enum定義（independentモード時のみ）
+  tables/
+    users.md         -- テーブルごとの定義
+    products.md
+    ...
+```
+
+各テーブルページにはカラム定義・インデックス・リレーション（参照先テーブルへのリンク付き）が含まれます。
 
 ### Excel
 
@@ -106,6 +90,6 @@ dbml-doc -i schema.dbml -e inline
 go test ./...
 
 # サンプルDBMLで動作確認
-go run . -i sample.dbml -f markdown
+go run . -i sample.dbml -o output
 go run . -i sample.dbml -f excel -o output.xlsx
 ```

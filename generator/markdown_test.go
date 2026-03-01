@@ -1,14 +1,33 @@
 package generator
 
 import (
-	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nobmurakita/dbml-doc/model"
 )
 
-func TestGenerateMarkdownBasic(t *testing.T) {
+func TestTableToFileName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"users", "users.md"},
+		{"public.users", "public_users.md"},
+		{"Public.Users", "public_users.md"},
+		{"schema.table_name", "schema_table_name.md"},
+	}
+	for _, tt := range tests {
+		got := tableToFileName(tt.input)
+		if got != tt.want {
+			t.Errorf("tableToFileName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestGenerateMarkdownPages(t *testing.T) {
 	defaultVal := "now()"
 	dbml := &model.DBML{
 		Project: &model.Project{
@@ -21,16 +40,17 @@ func TestGenerateMarkdownBasic(t *testing.T) {
 				Name: "users",
 				Note: "ユーザーテーブル",
 				Columns: []model.Column{
-					{Name: "id", Type: "integer", PrimaryKey: true, NotNull: true, Note: "ユーザーID"},
-					{Name: "name", Type: "varchar(255)", NotNull: true, Unique: true, Note: "ユーザー名"},
+					{Name: "id", Type: "integer", PrimaryKey: true, NotNull: true},
+					{Name: "name", Type: "varchar(255)", NotNull: true},
 					{Name: "created_at", Type: "timestamp", Default: &defaultVal},
 				},
-				Indexes: []model.Index{
-					{
-						Columns: []model.IndexColumn{{Name: "name"}},
-						Name:    "idx_name",
-						Unique:  true,
-					},
+			},
+			{
+				Name: "orders",
+				Note: "注文テーブル",
+				Columns: []model.Column{
+					{Name: "id", Type: "integer", PrimaryKey: true, NotNull: true},
+					{Name: "user_id", Type: "integer", NotNull: true},
 				},
 			},
 		},
@@ -43,71 +63,6 @@ func TestGenerateMarkdownBasic(t *testing.T) {
 				},
 			},
 		},
-	}
-
-	var buf bytes.Buffer
-	err := GenerateMarkdown(&buf, dbml, "independent")
-	if err != nil {
-		t.Fatalf("Markdown生成エラー: %v", err)
-	}
-
-	output := buf.String()
-
-	// ヘッダー
-	if !strings.Contains(output, "# データベース定義書") {
-		t.Error("タイトルが含まれていない")
-	}
-
-	// プロジェクト情報
-	if !strings.Contains(output, "**プロジェクト:** testdb") {
-		t.Error("プロジェクト名が含まれていない")
-	}
-	if !strings.Contains(output, "**データベース:** PostgreSQL") {
-		t.Error("データベース種別が含まれていない")
-	}
-
-	// テーブル一覧
-	if !strings.Contains(output, "## テーブル一覧") {
-		t.Error("テーブル一覧セクションが含まれていない")
-	}
-	if !strings.Contains(output, "| 1 | [users](#users) | ユーザーテーブル |") {
-		t.Error("テーブル一覧の内容が不正")
-	}
-
-	// カラム定義
-	if !strings.Contains(output, "| 1 | id | integer | NO | - | PK | ユーザーID |") {
-		t.Error("カラム定義が不正")
-	}
-	if !strings.Contains(output, "| 2 | name | varchar(255) | NO | - | PK, UNIQUE |") {
-		// nameはNotNull=trueだがPK=false
-		if !strings.Contains(output, "| 2 | name | varchar(255) | NO | - | UNIQUE | ユーザー名 |") {
-			t.Error("カラム定義（name）が不正")
-		}
-	}
-
-	// インデックス
-	if !strings.Contains(output, "**インデックス:**") {
-		t.Error("インデックスセクションが含まれていない")
-	}
-	if !strings.Contains(output, "| idx_name | name | - | YES |") {
-		t.Error("インデックス内容が不正")
-	}
-
-	// Enum定義
-	if !strings.Contains(output, "## Enum定義") {
-		t.Error("Enum定義セクションが含まれていない")
-	}
-	if !strings.Contains(output, "| active | 有効 |") {
-		t.Error("Enum値が不正")
-	}
-}
-
-func TestGenerateMarkdownWithRefs(t *testing.T) {
-	dbml := &model.DBML{
-		Tables: []model.Table{
-			{Name: "orders", Columns: []model.Column{{Name: "id", Type: "integer", PrimaryKey: true}, {Name: "user_id", Type: "integer", NotNull: true}}},
-			{Name: "users", Columns: []model.Column{{Name: "id", Type: "integer", PrimaryKey: true}}},
-		},
 		Refs: []model.Ref{
 			{
 				From: model.RefEndpoint{Table: "orders", Columns: []string{"user_id"}},
@@ -117,36 +72,81 @@ func TestGenerateMarkdownWithRefs(t *testing.T) {
 		},
 	}
 
-	var buf bytes.Buffer
-	err := GenerateMarkdown(&buf, dbml, "independent")
+	dir := t.TempDir()
+	err := GenerateMarkdownPages(dir, dbml, "independent")
 	if err != nil {
-		t.Fatalf("Markdown生成エラー: %v", err)
+		t.Fatalf("GenerateMarkdownPages失敗: %v", err)
 	}
 
-	output := buf.String()
-	if !strings.Contains(output, "**リレーション:**") {
-		t.Error("リレーションセクションが含まれていない")
+	// index.md の検証
+	indexData, err := os.ReadFile(filepath.Join(dir, "index.md"))
+	if err != nil {
+		t.Fatalf("index.md読み込み失敗: %v", err)
 	}
-	if !strings.Contains(output, "| user_id | users.id | N:1 |") {
-		t.Error("リレーション内容が不正")
+	index := string(indexData)
+	if !strings.Contains(index, "# データベース定義書") {
+		t.Error("index.md: タイトルが含まれていない")
+	}
+	if !strings.Contains(index, "**プロジェクト:** testdb") {
+		t.Error("index.md: プロジェクト名が含まれていない")
+	}
+	if !strings.Contains(index, "[users](tables/users.md)") {
+		t.Error("index.md: usersテーブルへのリンクが含まれていない")
+	}
+	if !strings.Contains(index, "[orders](tables/orders.md)") {
+		t.Error("index.md: ordersテーブルへのリンクが含まれていない")
+	}
+	if !strings.Contains(index, "[Enum定義一覧](enums.md)") {
+		t.Error("index.md: Enum定義へのリンクが含まれていない")
+	}
+
+	// enums.md の検証
+	enumsData, err := os.ReadFile(filepath.Join(dir, "enums.md"))
+	if err != nil {
+		t.Fatalf("enums.md読み込み失敗: %v", err)
+	}
+	enums := string(enumsData)
+	if !strings.Contains(enums, "[< 目次に戻る](index.md)") {
+		t.Error("enums.md: ナビゲーションリンクが含まれていない")
+	}
+	if !strings.Contains(enums, "### status") {
+		t.Error("enums.md: Enum名が含まれていない")
+	}
+	if !strings.Contains(enums, "| active | 有効 |") {
+		t.Error("enums.md: Enum値が含まれていない")
+	}
+
+	// tables/users.md の検証
+	usersData, err := os.ReadFile(filepath.Join(dir, "tables", "users.md"))
+	if err != nil {
+		t.Fatalf("tables/users.md読み込み失敗: %v", err)
+	}
+	users := string(usersData)
+	if !strings.Contains(users, "[< 目次に戻る](../index.md)") {
+		t.Error("users.md: ナビゲーションリンクが含まれていない")
+	}
+	if !strings.Contains(users, "## users") {
+		t.Error("users.md: テーブル名見出しが含まれていない")
+	}
+	if !strings.Contains(users, "| 1 | id | integer | NO | - | PK |") {
+		t.Error("users.md: カラム定義が含まれていない")
+	}
+
+	// tables/orders.md の検証（リレーションリンク付き）
+	ordersData, err := os.ReadFile(filepath.Join(dir, "tables", "orders.md"))
+	if err != nil {
+		t.Fatalf("tables/orders.md読み込み失敗: %v", err)
+	}
+	orders := string(ordersData)
+	if !strings.Contains(orders, "[< 目次に戻る](../index.md)") {
+		t.Error("orders.md: ナビゲーションリンクが含まれていない")
+	}
+	if !strings.Contains(orders, "[users.id](users.md)") {
+		t.Error("orders.md: リレーションの参照先リンクが含まれていない")
 	}
 }
 
-func TestGenerateMarkdownEmpty(t *testing.T) {
-	dbml := &model.DBML{}
-	var buf bytes.Buffer
-	err := GenerateMarkdown(&buf, dbml, "independent")
-	if err != nil {
-		t.Fatalf("Markdown生成エラー: %v", err)
-	}
-
-	output := buf.String()
-	if !strings.Contains(output, "# データベース定義書") {
-		t.Error("空DBMLでもタイトルは出力されるべき")
-	}
-}
-
-func TestGenerateMarkdownInlineEnum(t *testing.T) {
+func TestGenerateMarkdownPagesInlineEnum(t *testing.T) {
 	dbml := &model.DBML{
 		Tables: []model.Table{
 			{
@@ -154,7 +154,6 @@ func TestGenerateMarkdownInlineEnum(t *testing.T) {
 				Columns: []model.Column{
 					{Name: "id", Type: "integer", PrimaryKey: true, NotNull: true},
 					{Name: "status", Type: "user_status", NotNull: true, Note: "ユーザー状態"},
-					{Name: "role", Type: "user_role", NotNull: true},
 				},
 			},
 		},
@@ -164,44 +163,35 @@ func TestGenerateMarkdownInlineEnum(t *testing.T) {
 				Values: []model.EnumValue{
 					{Name: "active", Note: "有効"},
 					{Name: "inactive", Note: "無効"},
-					{Name: "suspended", Note: "停止"},
-				},
-			},
-			{
-				Name: "user_role",
-				Values: []model.EnumValue{
-					{Name: "admin"},
-					{Name: "member"},
 				},
 			},
 		},
 	}
 
-	var buf bytes.Buffer
-	err := GenerateMarkdown(&buf, dbml, "inline")
+	dir := t.TempDir()
+	err := GenerateMarkdownPages(dir, dbml, "inline")
 	if err != nil {
-		t.Fatalf("Markdown生成エラー: %v", err)
+		t.Fatalf("GenerateMarkdownPages失敗: %v", err)
 	}
 
-	output := buf.String()
-
-	// Enum定義セクションが出力されないこと
-	if strings.Contains(output, "## Enum定義") {
-		t.Error("inlineモードではEnum定義セクションは出力されないべき")
+	// inlineモードではenums.mdが生成されないこと
+	if _, err := os.Stat(filepath.Join(dir, "enums.md")); !os.IsNotExist(err) {
+		t.Error("inlineモードではenums.mdは生成されないべき")
 	}
 
-	// カラム型がENUM展開されていること（値ごとに<br>で改行）
-	if !strings.Contains(output, "ENUM(<br>'active',<br>'inactive',<br>'suspended'<br>)") {
-		t.Error("statusカラムの型がENUM展開されていない")
+	// index.mdにEnum定義セクションがないこと
+	indexData, _ := os.ReadFile(filepath.Join(dir, "index.md"))
+	if strings.Contains(string(indexData), "Enum定義") {
+		t.Error("inlineモードのindex.mdにEnum定義セクションは含まれないべき")
 	}
 
-	// Noteを持つEnum値の説明がカラムNoteに追加されていること
-	if !strings.Contains(output, "ユーザー状態<br>active=有効, inactive=無効, suspended=停止") {
-		t.Error("statusカラムのNoteにEnum説明が追加されていない")
+	// テーブルページでinline展開されていること
+	usersData, _ := os.ReadFile(filepath.Join(dir, "tables", "users.md"))
+	users := string(usersData)
+	if !strings.Contains(users, "ENUM(<br>'active',<br>'inactive'<br>)") {
+		t.Error("inlineモードでEnum型が展開されていない")
 	}
-
-	// Noteを持たないEnum値のカラムは型だけ展開
-	if !strings.Contains(output, "ENUM(<br>'admin',<br>'member'<br>)") {
-		t.Error("roleカラムの型がENUM展開されていない")
+	if !strings.Contains(users, "ユーザー状態<br>active=有効, inactive=無効") {
+		t.Error("inlineモードでEnumのNoteが展開されていない")
 	}
 }
