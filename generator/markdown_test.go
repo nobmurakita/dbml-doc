@@ -131,6 +131,13 @@ func TestGenerateMarkdownPages(t *testing.T) {
 	if !strings.Contains(users, "| 1 | id | integer | NO | - | PK |") {
 		t.Error("users.md: カラム定義が含まれていない")
 	}
+	// users.md: 参照元リレーション（ordersから参照されている）
+	if !strings.Contains(users, "**リレーション（参照元）:**") {
+		t.Error("users.md: 参照元リレーションセクションが含まれていない")
+	}
+	if !strings.Contains(users, "[orders.user_id](orders.md)") {
+		t.Error("users.md: 参照元リレーションのリンクが含まれていない")
+	}
 
 	// tables/orders.md の検証（リレーションリンク付き）
 	ordersData, err := os.ReadFile(filepath.Join(dir, "tables", "orders.md"))
