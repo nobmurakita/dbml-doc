@@ -12,7 +12,7 @@ import (
 func main() {
 	inputFile := flag.String("i", "", "入力DBMLファイル（必須）")
 	format := flag.String("f", "markdown", "出力形式: markdown | excel")
-	outputFile := flag.String("o", "", "出力ファイルパス（省略時: stdoutまたはデフォルトファイル名）")
+	output := flag.String("o", "", "出力先（markdown: ディレクトリ、excel: ファイルパス）")
 	enumMode := flag.String("e", "independent", "Enum表示モード: independent | inline")
 	flag.Parse()
 
@@ -42,31 +42,26 @@ func main() {
 
 	switch *format {
 	case "markdown":
-		w := os.Stdout
-		if *outputFile != "" {
-			f, err := os.Create(*outputFile)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "エラー: 出力ファイル作成失敗: %v\n", err)
-				os.Exit(1)
-			}
-			defer f.Close()
-			w = f
+		outDir := *output
+		if outDir == "" {
+			outDir = "output"
 		}
-		if err := generator.GenerateMarkdown(w, dbml, *enumMode); err != nil {
+		if err := generator.GenerateMarkdownPages(outDir, dbml, *enumMode); err != nil {
 			fmt.Fprintf(os.Stderr, "エラー: Markdown生成失敗: %v\n", err)
 			os.Exit(1)
 		}
+		fmt.Fprintf(os.Stderr, "%s/ に出力しました\n", outDir)
 
 	case "excel":
-		output := *outputFile
-		if output == "" {
-			output = "output.xlsx"
+		outFile := *output
+		if outFile == "" {
+			outFile = "output.xlsx"
 		}
-		if err := generator.GenerateExcel(output, dbml, *enumMode); err != nil {
+		if err := generator.GenerateExcel(outFile, dbml, *enumMode); err != nil {
 			fmt.Fprintf(os.Stderr, "エラー: Excel生成失敗: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "%s を生成しました\n", output)
+		fmt.Fprintf(os.Stderr, "%s を生成しました\n", outFile)
 
 	default:
 		fmt.Fprintf(os.Stderr, "エラー: 不明な出力形式: %s（markdown または excel を指定してください）\n", *format)
