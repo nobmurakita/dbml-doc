@@ -42,6 +42,7 @@ func GenerateExcel(filename string, dbml *model.DBML, enumMode string) error {
 
 	// Refマップ構築
 	refMap := buildRefMap(dbml)
+	reverseRefMap := buildReverseRefMap(dbml)
 
 	// テーブルごとのシート
 	for _, t := range dbml.Tables {
@@ -63,8 +64,9 @@ func GenerateExcel(filename string, dbml *model.DBML, enumMode string) error {
 			tableName = t.Schema + "." + t.Name
 		}
 		refs := refMap[tableName]
+		reverseRefs := reverseRefMap[tableName]
 
-		if err := writeTableSheet(f, sheetName, &t, refs, enumMode, enumMap, headerStyle, cellStyle); err != nil {
+		if err := writeTableSheet(f, sheetName, &t, refs, reverseRefs, enumMode, enumMap, headerStyle, cellStyle); err != nil {
 			return err
 		}
 	}
@@ -97,6 +99,37 @@ func createHeaderStyle(f *excelize.File) (int, error) {
 	})
 }
 
+func createLinkStyle(f *excelize.File) (int, error) {
+	return f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Color:     "#0563C1",
+			Underline: "single",
+			Size:      11,
+		},
+		Border: []excelize.Border{
+			{Type: "left", Color: "#B0B0B0", Style: 1},
+			{Type: "top", Color: "#B0B0B0", Style: 1},
+			{Type: "bottom", Color: "#B0B0B0", Style: 1},
+			{Type: "right", Color: "#B0B0B0", Style: 1},
+		},
+		Alignment: &excelize.Alignment{
+			Vertical: "center",
+		},
+	})
+}
+
+func createSectionStyle(f *excelize.File) (int, error) {
+	return f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Bold: true,
+			Size: 11,
+		},
+		Alignment: &excelize.Alignment{
+			Vertical: "center",
+		},
+	})
+}
+
 func createCellStyle(f *excelize.File) (int, error) {
 	return f.NewStyle(&excelize.Style{
 		Border: []excelize.Border{
@@ -113,6 +146,11 @@ func createCellStyle(f *excelize.File) (int, error) {
 }
 
 func writeTableIndex(f *excelize.File, sheet string, dbml *model.DBML, headerStyle, cellStyle int) error {
+	linkStyle, err := createLinkStyle(f)
+	if err != nil {
+		return fmt.Errorf("リンクスタイル作成エラー: %w", err)
+	}
+
 	headers := []string{"#", "テーブル名", "説明"}
 	widths := []float64{5, 30, 50}
 
@@ -129,12 +167,26 @@ func writeTableIndex(f *excelize.File, sheet string, dbml *model.DBML, headerSty
 		if t.Schema != "" {
 			tableName = t.Schema + "." + t.Name
 		}
-		values := []interface{}{i + 1, tableName, t.Note}
-		for j, v := range values {
-			cell, _ := excelize.CoordinatesToCellName(j+1, row)
-			f.SetCellValue(sheet, cell, v)
-			f.SetCellStyle(sheet, cell, cell, cellStyle)
+		sheetName := tableName
+		if len(sheetName) > 31 {
+			sheetName = sheetName[:31]
 		}
+
+		// #
+		numCell, _ := excelize.CoordinatesToCellName(1, row)
+		f.SetCellValue(sheet, numCell, i+1)
+		f.SetCellStyle(sheet, numCell, numCell, cellStyle)
+
+		// テーブル名（HYPERLINKで各シートへリンク）
+		nameCell, _ := excelize.CoordinatesToCellName(2, row)
+		formula := fmt.Sprintf(`HYPERLINK("#'%s'!A1","%s")`, sheetName, tableName)
+		f.SetCellFormula(sheet, nameCell, formula)
+		f.SetCellStyle(sheet, nameCell, nameCell, linkStyle)
+
+		// 説明
+		noteCell, _ := excelize.CoordinatesToCellName(3, row)
+		f.SetCellValue(sheet, noteCell, t.Note)
+		f.SetCellStyle(sheet, noteCell, noteCell, cellStyle)
 	}
 
 	return nil
@@ -173,34 +225,46 @@ func writeEnumSheet(f *excelize.File, dbml *model.DBML, headerStyle, cellStyle i
 	return nil
 }
 
-func writeTableSheet(f *excelize.File, sheet string, t *model.Table, refs []refInfo, enumMode string, enumMap map[string]*model.Enum, headerStyle, cellStyle int) error {
+func writeTableSheet(f *excelize.File, sheet string, t *model.Table, refs []refInfo, reverseRefs []refInfo, enumMode string, enumMap map[string]*model.Enum, headerStyle, cellStyle int) error {
+	sectionStyle, err := createSectionStyle(f)
+	if err != nil {
+		return fmt.Errorf("セクションスタイル作成エラー: %w", err)
+	}
+
 	row := 1
 
 	// テーブル名
 	f.SetCellValue(sheet, cell(1, row), "テーブル名")
-	f.SetCellStyle(sheet, cell(1, row), cell(1, row), headerStyle)
+	f.MergeCell(sheet, cell(1, row), cell(2, row))
+	f.SetCellStyle(sheet, cell(1, row), cell(2, row), headerStyle)
 	tableName := t.Name
 	if t.Schema != "" {
 		tableName = t.Schema + "." + t.Name
 	}
-	f.SetCellValue(sheet, cell(2, row), tableName)
-	f.SetCellStyle(sheet, cell(2, row), cell(2, row), cellStyle)
+	f.SetCellValue(sheet, cell(3, row), tableName)
+	f.SetCellStyle(sheet, cell(3, row), cell(3, row), cellStyle)
 	row++
 
 	// 説明
 	if t.Note != "" {
 		f.SetCellValue(sheet, cell(1, row), "説明")
-		f.SetCellStyle(sheet, cell(1, row), cell(1, row), headerStyle)
-		f.SetCellValue(sheet, cell(2, row), t.Note)
-		f.SetCellStyle(sheet, cell(2, row), cell(2, row), cellStyle)
+		f.MergeCell(sheet, cell(1, row), cell(2, row))
+		f.SetCellStyle(sheet, cell(1, row), cell(2, row), headerStyle)
+		f.SetCellValue(sheet, cell(3, row), t.Note)
+		f.SetCellStyle(sheet, cell(3, row), cell(3, row), cellStyle)
 		row++
 	}
 
 	row++ // 空行
 
+	// カラム見出し
+	f.SetCellValue(sheet, cell(1, row), "カラム")
+	f.SetCellStyle(sheet, cell(1, row), cell(1, row), sectionStyle)
+	row++
+
 	// カラム定義ヘッダー
 	colHeaders := []string{"#", "カラム名", "型", "NULL", "デフォルト", "制約", "説明"}
-	colWidths := []float64{5, 20, 20, 8, 15, 18, 30}
+	colWidths := []float64{5, 20, 30, 8, 15, 18, 30}
 	for i, h := range colHeaders {
 		f.SetCellValue(sheet, cell(i+1, row), h)
 		f.SetCellStyle(sheet, cell(i+1, row), cell(i+1, row), headerStyle)
@@ -247,14 +311,19 @@ func writeTableSheet(f *excelize.File, sheet string, t *model.Table, refs []refI
 	if len(t.Indexes) > 0 {
 		row++ // 空行
 
-		idxHeaders := []string{"インデックス名", "カラム", "種類", "ユニーク"}
+		// インデックス見出し
+		f.SetCellValue(sheet, cell(1, row), "インデックス")
+		f.SetCellStyle(sheet, cell(1, row), cell(1, row), sectionStyle)
+		row++
+
+		idxHeaders := []string{"#", "インデックス名", "カラム", "種類", "ユニーク"}
 		for i, h := range idxHeaders {
 			f.SetCellValue(sheet, cell(i+1, row), h)
 			f.SetCellStyle(sheet, cell(i+1, row), cell(i+1, row), headerStyle)
 		}
 		row++
 
-		for _, idx := range t.Indexes {
+		for i, idx := range t.Indexes {
 			idxName := idx.Name
 			if idxName == "" {
 				idxName = "-"
@@ -269,7 +338,7 @@ func writeTableSheet(f *excelize.File, sheet string, t *model.Table, refs []refI
 				unique = "YES"
 			}
 
-			values := []interface{}{idxName, cols, idxType, unique}
+			values := []interface{}{i + 1, idxName, cols, idxType, unique}
 			for j, v := range values {
 				f.SetCellValue(sheet, cell(j+1, row), v)
 				f.SetCellStyle(sheet, cell(j+1, row), cell(j+1, row), cellStyle)
@@ -278,28 +347,81 @@ func writeTableSheet(f *excelize.File, sheet string, t *model.Table, refs []refI
 		}
 	}
 
-	// リレーション
+	// リンクスタイル
+	linkStyle, err := createLinkStyle(f)
+	if err != nil {
+		return fmt.Errorf("リンクスタイル作成エラー: %w", err)
+	}
+
+	// リレーション（参照先）
 	if len(refs) > 0 {
 		row++ // 空行
 
-		refHeaders := []string{"カラム", "参照先", "種類"}
+		// リレーション（参照先）見出し
+		f.SetCellValue(sheet, cell(1, row), "リレーション（参照先）")
+		f.SetCellStyle(sheet, cell(1, row), cell(1, row), sectionStyle)
+		row++
+
+		refHeaders := []string{"#", "カラム", "参照先", "種類"}
 		for i, h := range refHeaders {
 			f.SetCellValue(sheet, cell(i+1, row), h)
 			f.SetCellStyle(sheet, cell(i+1, row), cell(i+1, row), headerStyle)
 		}
 		row++
 
-		for _, r := range refs {
-			values := []interface{}{r.column, r.target, r.relType}
-			for j, v := range values {
-				f.SetCellValue(sheet, cell(j+1, row), v)
-				f.SetCellStyle(sheet, cell(j+1, row), cell(j+1, row), cellStyle)
-			}
+		for i, r := range refs {
+			writeRefRow(f, sheet, row, i+1, r, linkStyle, cellStyle)
+			row++
+		}
+	}
+
+	// リレーション（参照元）
+	if len(reverseRefs) > 0 {
+		row++ // 空行
+
+		// リレーション（参照元）見出し
+		f.SetCellValue(sheet, cell(1, row), "リレーション（参照元）")
+		f.SetCellStyle(sheet, cell(1, row), cell(1, row), sectionStyle)
+		row++
+
+		revHeaders := []string{"#", "カラム", "参照元", "種類"}
+		for i, h := range revHeaders {
+			f.SetCellValue(sheet, cell(i+1, row), h)
+			f.SetCellStyle(sheet, cell(i+1, row), cell(i+1, row), headerStyle)
+		}
+		row++
+
+		for i, r := range reverseRefs {
+			writeRefRow(f, sheet, row, i+1, r, linkStyle, cellStyle)
 			row++
 		}
 	}
 
 	return nil
+}
+
+func writeRefRow(f *excelize.File, sheet string, row int, num int, r refInfo, linkStyle, cellStyle int) {
+	// #
+	f.SetCellValue(sheet, cell(1, row), num)
+	f.SetCellStyle(sheet, cell(1, row), cell(1, row), cellStyle)
+
+	// カラム
+	f.SetCellValue(sheet, cell(2, row), r.column)
+	f.SetCellStyle(sheet, cell(2, row), cell(2, row), cellStyle)
+
+	// 参照先/参照元（HYPERLINKで対象シートへリンク）
+	targetCell := cell(3, row)
+	sheetName := r.toTable
+	if len(sheetName) > 31 {
+		sheetName = sheetName[:31]
+	}
+	formula := fmt.Sprintf(`HYPERLINK("#'%s'!A1","%s")`, sheetName, r.target)
+	f.SetCellFormula(sheet, targetCell, formula)
+	f.SetCellStyle(sheet, targetCell, targetCell, linkStyle)
+
+	// 種類
+	f.SetCellValue(sheet, cell(4, row), r.relType)
+	f.SetCellStyle(sheet, cell(4, row), cell(4, row), cellStyle)
 }
 
 func cell(col, row int) string {

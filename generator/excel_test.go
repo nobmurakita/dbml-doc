@@ -54,20 +54,21 @@ func TestGenerateExcelBasic(t *testing.T) {
 		t.Errorf("sheet[1]: got %q, want 'users'", sheets[1])
 	}
 
-	// テーブル一覧の内容
-	val, _ := f.GetCellValue("テーブル一覧", "B2")
-	if val != "users" {
-		t.Errorf("テーブル一覧 B2: got %q, want 'users'", val)
+	// テーブル一覧の内容（HYPERLINKで各シートへリンク）
+	formula, _ := f.GetCellFormula("テーブル一覧", "B2")
+	expectedFormula := `HYPERLINK("#'users'!A1","users")`
+	if formula != expectedFormula {
+		t.Errorf("テーブル一覧 B2 formula: got %q, want %q", formula, expectedFormula)
 	}
-	val, _ = f.GetCellValue("テーブル一覧", "C2")
+	val, _ := f.GetCellValue("テーブル一覧", "C2")
 	if val != "ユーザーテーブル" {
 		t.Errorf("テーブル一覧 C2: got %q, want 'ユーザーテーブル'", val)
 	}
 
 	// usersシートのカラム定義
-	val, _ = f.GetCellValue("users", "B5")
+	val, _ = f.GetCellValue("users", "B6")
 	if val != "id" {
-		t.Errorf("users B5: got %q, want 'id'", val)
+		t.Errorf("users B6: got %q, want 'id'", val)
 	}
 }
 
@@ -153,9 +154,9 @@ func TestGenerateExcelWithEnumIndependent(t *testing.T) {
 	}
 
 	// カラム型はEnum名のまま
-	val, _ = f.GetCellValue("users", "C5")
+	val, _ = f.GetCellValue("users", "C6")
 	if val != "user_status" {
-		t.Errorf("users C5 (型): got %q, want 'user_status'", val)
+		t.Errorf("users C6 (型): got %q, want 'user_status'", val)
 	}
 }
 
@@ -200,16 +201,16 @@ func TestGenerateExcelWithEnumInline(t *testing.T) {
 	}
 
 	// カラム型がENUM展開されていること（値ごとに改行）
-	val, _ := f.GetCellValue("users", "C5")
+	val, _ := f.GetCellValue("users", "C6")
 	expectedType := "ENUM(\n'active',\n'inactive'\n)"
 	if val != expectedType {
-		t.Errorf("users C5 (型): got %q, want %q", val, expectedType)
+		t.Errorf("users C6 (型): got %q, want %q", val, expectedType)
 	}
 
 	// NoteにEnum説明が追加されていること
-	val, _ = f.GetCellValue("users", "G5")
+	val, _ = f.GetCellValue("users", "G6")
 	expected := "ユーザー状態\nactive=有効, inactive=無効"
 	if val != expected {
-		t.Errorf("users G5 (説明): got %q, want %q", val, expected)
+		t.Errorf("users G6 (説明): got %q, want %q", val, expected)
 	}
 }
